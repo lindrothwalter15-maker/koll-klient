@@ -17,6 +17,8 @@ public final class InvUtil {
         return -1;
     }
 
+    public static int selected() { return mc.player.getInventory().getSelectedSlot(); }
+
     // NOTE: selected-slot accessors changed in 1.21.5+. Verify on compile.
     public static void select(int slot) {
         if (slot < 0 || slot > 8) return;

@@ -13,6 +13,7 @@ import dev.nexus.module.modules.CombatBotModule;
 import dev.nexus.module.modules.CrystalAuraModule;
 import dev.nexus.module.modules.HudModule;
 import dev.nexus.module.modules.KillAuraModule;
+import dev.nexus.module.modules.*;
 import dev.nexus.module.modules.SprintModule;
 import dev.nexus.module.modules.TriggerBotModule;
 import dev.nexus.module.modules.WTapModule;
@@ -51,6 +52,21 @@ public final class NexusClient implements ClientModInitializer {
         MODULES.register(new WTapModule());
         MODULES.register(new CombatBotModule());
         MODULES.register(new SprintModule());
+        MODULES.register(new JesusModule());
+        MODULES.register(new NoFallModule());
+        MODULES.register(new FlightModule());
+        MODULES.register(new SpeedModule());
+        MODULES.register(new SpiderModule());
+        MODULES.register(new FullBrightModule());
+        MODULES.register(new GlowEspModule());
+        MODULES.register(new AutoEatModule());
+        MODULES.register(new AutoJumpModule());
+        MODULES.register(new AntiAfkModule());
+        MODULES.register(new AutoRespawnModule());
+        MODULES.register(new ChestStealerModule());
+        MODULES.register(new AutoToolModule());
+        MODULES.register(new ScaffoldModule());
+        MODULES.register(new SneakModule());
         // Combat modules are registered here in later stages.
 
         hud.setEnabled(true); // default; a saved profile may override this
