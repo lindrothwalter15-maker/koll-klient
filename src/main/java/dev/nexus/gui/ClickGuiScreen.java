@@ -18,6 +18,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -25,18 +26,24 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Immediate-mode ClickGUI. Input is polled through GLFW so it does not depend on
- * the Screen input method signatures (which changed in 1.21.9+).
- * Left click: toggle module. Right click: expand settings. Type: search. Esc: close.
+ * Immediate-mode ClickGUI. Mouse buttons and keys are polled through GLFW so they do not depend on
+ * the Screen input method signatures (which changed in 1.21.9+). Scrolling uses mouseScrolled.
+ * Left click: toggle module. Right click: expand settings. Drag a header: move the panel.
+ * Mouse wheel over a panel: scroll it. Type: search. Esc: close.
  */
 public final class ClickGuiScreen extends Screen {
     private static final int PW = 116, HEADER = 20, ROW = 17, SROW = 15, GAP = 8, PAD = 5, TOP = 34;
     private static final int HEAD_BG = 0xFF171724, ROW_BG = 0xFF14141E, SET_BG = 0xFF0C0C14, BOX = 0xFF2A2A3C;
     private static final int HOVER = 0x30FFFFFF, TEXT = 0xFFE8E8F2, DIM = 0xFF8C8CA6;
 
+    /** Panel positions survive closing and reopening the menu (until the game is closed). */
+    private static final Map<Category, int[]> POS = new EnumMap<>(Category.class);
+
     private final MinecraftClient mc = MinecraftClient.getInstance();
     private final Map<Module, Float> progress = new IdentityHashMap<>();
     private final Set<Module> expanded = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<Category, float[]> scroll = new EnumMap<>(Category.class); // {target, shown}
+    private final Map<Category, int[]> bounds = new EnumMap<>(Category.class);   // {x, y, w, h}
     private final boolean[] prevKey = new boolean[GLFW.GLFW_KEY_LAST + 1];
 
     private String search = "";
@@ -49,6 +56,9 @@ public final class ClickGuiScreen extends Screen {
     private int sliderX, sliderW;
     private Module listening;
     private String tooltip;
+    private Category dragging;
+    private int dragDx, dragDy;
+    private int clipTop, clipBottom;
 
     public ClickGuiScreen() {
         super(Text.literal("Nexus"));
@@ -61,6 +71,19 @@ public final class ClickGuiScreen extends Screen {
     public void removed() {
         NexusClient.CONFIG.saveAsync(NexusClient.CONFIG.currentProfile());
         super.removed();
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        for (Map.Entry<Category, int[]> e : bounds.entrySet()) {
+            int[] b = e.getValue();
+            if (mouseX >= b[0] && mouseX < b[0] + b[2] && mouseY >= b[1] && mouseY < b[1] + b[3]) {
+                float[] sc = scroll.computeIfAbsent(e.getKey(), k -> new float[2]);
+                sc[0] += (float) (-verticalAmount * ROW * 1.5);
+                return true;
+            }
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
     @Override
@@ -77,7 +100,7 @@ public final class ClickGuiScreen extends Screen {
         boolean rClick = r && !prevR;
         prevL = l;
         prevR = r;
-        if (!l) slider = null;
+        if (!l) { slider = null; dragging = null; }
 
         open = RenderUtil.approach(open, 1f, dt * 5f);
         handleKeys();
@@ -86,20 +109,32 @@ public final class ClickGuiScreen extends Screen {
         else ctx.fill(0, 0, width, height, RenderUtil.alpha(0xFF000000, 0.5f * open));
 
         tooltip = null;
+        bounds.clear();
         drawSearch(ctx);
 
-        int panels = 0;
-        for (Category c : Category.values()) if (!modulesFor(c).isEmpty()) panels++;
-        if (panels > 0) {
-            int total = panels * PW + (panels - 1) * GAP;
-            int x = (width - total) / 2;
-            int y = TOP + Math.round((1f - open) * -10f);
-            for (Category c : Category.values()) {
-                List<Module> mods = modulesFor(c);
-                if (mods.isEmpty()) continue;
-                drawPanel(ctx, c, mods, x, y, mx, my, lClick, rClick);
-                x += PW + GAP;
-            }
+        // Default positions: centered row over every category that has modules (kept when searching).
+        List<Category> all = new ArrayList<>();
+        for (Category c : Category.values()) if (!NexusClient.MODULES.inCategory(c).isEmpty()) all.add(c);
+        int total = all.size() * PW + Math.max(0, all.size() - 1) * GAP;
+        int startX = (width - total) / 2;
+        for (int i = 0; i < all.size(); i++) {
+            Category c = all.get(i);
+            if (!POS.containsKey(c)) POS.put(c, new int[] { startX + i * (PW + GAP), TOP });
+        }
+
+        if (dragging != null && l) {
+            int[] p = POS.get(dragging);
+            if (p != null) { p[0] = mx - dragDx; p[1] = my - dragDy; }
+        }
+
+        int slide = Math.round((1f - open) * -10f);
+        for (Category c : all) {
+            int[] p = POS.get(c);
+            p[0] = Math.max(0, Math.min(Math.max(0, width - PW), p[0]));
+            p[1] = Math.max(0, Math.min(Math.max(0, height - HEADER), p[1]));
+            List<Module> mods = modulesFor(c);
+            if (mods.isEmpty()) continue;
+            drawPanel(ctx, c, mods, p[0], p[1] + slide, mx, my, lClick, rClick);
         }
 
         if (tooltip != null) {
@@ -118,19 +153,57 @@ public final class ClickGuiScreen extends Screen {
         RenderUtil.text(ctx, shown, sx + 6, sy + 4, RenderUtil.alpha(search.isEmpty() ? DIM : TEXT, open));
     }
 
+    private int contentHeight(List<Module> mods) {
+        int h = 0;
+        for (Module m : mods) {
+            h += ROW;
+            float p = progress.getOrDefault(m, 0f);
+            if (p > 0.001f) {
+                int vis = 0;
+                for (Setting<?> s : m.getSettings()) if (s.isVisible()) vis++;
+                h += Math.round((vis + 1) * SROW * p);
+            }
+        }
+        return h;
+    }
+
     private void drawPanel(DrawContext ctx, Category cat, List<Module> mods, int x, int y,
                            int mx, int my, boolean lClick, boolean rClick) {
         int accent = NexusClient.GUI_CFG.accent();
         float a = open;
+
+        int contentH = contentHeight(mods);
+        int maxVisible = Math.max(2 * ROW, height - y - HEADER - 8);
+        int visibleH = Math.min(contentH, maxVisible);
+        int maxScroll = Math.max(0, contentH - visibleH);
+        float[] sc = scroll.computeIfAbsent(cat, k -> new float[2]);
+        sc[0] = Math.max(0f, Math.min((float) maxScroll, sc[0]));
+        sc[1] += (sc[0] - sc[1]) * Math.min(1f, dt * 14f);
+        if (Math.abs(sc[0] - sc[1]) < 0.3f) sc[1] = sc[0];
+        int off = Math.round(sc[1]);
+        bounds.put(cat, new int[] { x, y, PW, HEADER + visibleH + 1 });
+
         ctx.fill(x, y, x + PW, y + HEADER, RenderUtil.alpha(HEAD_BG, a));
         ctx.fill(x, y + HEADER - 1, x + PW, y + HEADER, RenderUtil.alpha(accent, a));
         RenderUtil.text(ctx, cat.getDisplayName(), x + PAD, y + 6, RenderUtil.alpha(TEXT, a));
         String cnt = Integer.toString(mods.size());
         RenderUtil.text(ctx, cnt, x + PW - PAD - RenderUtil.width(cnt), y + 6, RenderUtil.alpha(DIM, a));
 
-        int cy = y + HEADER;
+        boolean hoverHeader = mx >= x && mx < x + PW && my >= y && my < y + HEADER;
+        if (hoverHeader) {
+            tooltip = "Drag to move";
+            if (lClick && dragging == null) { dragging = cat; dragDx = mx - x; dragDy = my - y; }
+        }
+
+        int top = y + HEADER;
+        int bottom = top + visibleH;
+        clipTop = top;
+        clipBottom = bottom;
+
+        ctx.enableScissor(x, top, x + PW, bottom);
+        int cy = top - off;
         for (Module m : mods) {
-            boolean hover = mx >= x && mx < x + PW && my >= cy && my < cy + ROW;
+            boolean hover = mx >= x && mx < x + PW && my >= cy && my < cy + ROW && my >= top && my < bottom;
             ctx.fill(x, cy, x + PW, cy + ROW, RenderUtil.alpha(ROW_BG, a));
             if (m.isEnabled()) {
                 ctx.fill(x, cy, x + PW, cy + ROW, RenderUtil.alpha(accent, 0.30f * a));
@@ -155,7 +228,14 @@ public final class ClickGuiScreen extends Screen {
             progress.put(m, p);
             if (p > 0.001f) cy += drawSettings(ctx, m, x, cy, p, mx, my, lClick);
         }
-        ctx.fill(x, cy, x + PW, cy + 1, RenderUtil.alpha(accent, a));
+        ctx.disableScissor();
+
+        if (maxScroll > 0) {
+            int barH = Math.max(12, visibleH * visibleH / contentH);
+            int barY = top + Math.round((visibleH - barH) * (sc[1] / maxScroll));
+            ctx.fill(x + PW - 2, barY, x + PW, barY + barH, RenderUtil.alpha(accent, a));
+        }
+        ctx.fill(x, bottom, x + PW, bottom + 1, RenderUtil.alpha(accent, a));
     }
 
     private int drawSettings(DrawContext ctx, Module m, int x, int y, float p, int mx, int my, boolean lClick) {
@@ -165,11 +245,12 @@ public final class ClickGuiScreen extends Screen {
         for (Setting<?> s : m.getSettings()) if (s.isVisible()) vis.add(s);
         int full = (vis.size() + 1) * SROW;
         int h = Math.round(full * p);
+        boolean inClip = my >= clipTop && my < clipBottom;
 
         ctx.enableScissor(x, y, x + PW, y + h);
         int ry = y;
         for (Setting<?> s : vis) {
-            boolean hov = mx >= x && mx < x + PW && my >= ry && my < ry + SROW && my < y + h;
+            boolean hov = inClip && mx >= x && mx < x + PW && my >= ry && my < ry + SROW && my < y + h;
             ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(SET_BG, a));
             if (hov) {
                 ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(HOVER, a));
@@ -209,7 +290,7 @@ public final class ClickGuiScreen extends Screen {
             ry += SROW;
         }
 
-        boolean hovBind = mx >= x && mx < x + PW && my >= ry && my < ry + SROW && my < y + h;
+        boolean hovBind = inClip && mx >= x && mx < x + PW && my >= ry && my < ry + SROW && my < y + h;
         ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(SET_BG, a));
         if (hovBind) {
             ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(HOVER, a));
