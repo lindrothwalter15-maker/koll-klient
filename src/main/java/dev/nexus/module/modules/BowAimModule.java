@@ -42,7 +42,7 @@ public final class BowAimModule extends Module {
         TargetUtil.report(t);
 
         float v = bow ? 3.0f : 3.15f;
-        Vec3d tp = t.getPos().add(0, t.getHeight() * 0.6, 0);
+        Vec3d tp = new Vec3d(t.getX(), t.getY() + t.getHeight() * 0.6, t.getZ());
         Vec3d vel = (t == lastTarget) ? tp.subtract(lastPos) : Vec3d.ZERO;
         lastTarget = t;
         lastPos = tp;
