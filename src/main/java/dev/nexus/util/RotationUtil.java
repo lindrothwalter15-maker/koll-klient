@@ -27,4 +27,12 @@ public final class RotationUtil {
         mc.player.setYaw(cy + MathHelper.clamp(dyaw, -maxStep, maxStep));
         mc.player.setPitch(MathHelper.clamp(cp + MathHelper.clamp(dpitch, -maxStep, maxStep), -90f, 90f));
     }
+
+    /** Signed yaw difference (degrees) between where you look and the entity's hitbox center. */
+    public static float yawDiff(Entity target) {
+        Vec3d eye = mc.player.getEyePos();
+        Vec3d to = target.getBoundingBox().getCenter();
+        float yaw = (float) (Math.toDegrees(Math.atan2(to.z - eye.z, to.x - eye.x)) - 90.0);
+        return MathHelper.wrapDegrees(yaw - mc.player.getYaw());
+    }
 }

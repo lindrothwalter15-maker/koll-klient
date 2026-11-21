@@ -14,6 +14,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
@@ -27,20 +28,23 @@ import java.util.Set;
 
 /**
  * Immediate-mode ClickGUI. Mouse buttons and keys are polled through GLFW so they do not depend on
- * the Screen input method signatures (which changed in 1.21.9+). Scrolling uses mouseScrolled.
+ * the Screen input signatures (changed in 1.21.9+). Scrolling uses mouseScrolled.
  * Left click: toggle module. Right click: expand settings. Drag a header: move the panel.
- * Mouse wheel over a panel: scroll it. Type: search. Esc: close.
+ * Mouse wheel over a panel: scroll. Type: search. Esc / Right Shift: close.
  */
 public final class ClickGuiScreen extends Screen {
-    private static final int PW = 116, HEADER = 20, ROW = 17, SROW = 15, GAP = 8, PAD = 5, TOP = 34;
-    private static final int HEAD_BG = 0xFF171724, ROW_BG = 0xFF14141E, SET_BG = 0xFF0C0C14, BOX = 0xFF2A2A3C;
-    private static final int HOVER = 0x30FFFFFF, TEXT = 0xFFE8E8F2, DIM = 0xFF8C8CA6;
+    private static final int PW = 126, IP = 4, RW = PW - 2 * IP, HEADER = 24, ROW = 18, RGAP = 2, SROW = 16;
+    private static final int GAP = 10, PAD = 7, TOP = 44;
+    private static final int PANEL_BG = 0xF0101018, HEAD_BG = 0xFF161622, ROW_BG = 0xFF1B1B2A, SET_BG = 0xFF131320;
+    private static final int BOX = 0xFF2E2E44, TEXT = 0xFFF2F2FC, DIM = 0xFF8E8EA8, OFF_TEXT = 0xFFB6B6CC;
 
     /** Panel positions survive closing and reopening the menu (until the game is closed). */
     private static final Map<Category, int[]> POS = new EnumMap<>(Category.class);
 
     private final MinecraftClient mc = MinecraftClient.getInstance();
     private final Map<Module, Float> progress = new IdentityHashMap<>();
+    private final Map<Object, Float> enAnim = new IdentityHashMap<>();
+    private final Map<Object, Float> hvAnim = new IdentityHashMap<>();
     private final Set<Module> expanded = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Map<Category, float[]> scroll = new EnumMap<>(Category.class); // {target, shown}
     private final Map<Category, int[]> bounds = new EnumMap<>(Category.class);   // {x, y, w, h}
@@ -86,6 +90,13 @@ public final class ClickGuiScreen extends Screen {
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
+    private float anim(Map<Object, Float> map, Object key, boolean on, float speed) {
+        float cur = map.getOrDefault(key, on ? 1f : 0f);
+        cur = RenderUtil.approach(cur, on ? 1f : 0f, dt * speed);
+        map.put(key, cur);
+        return cur;
+    }
+
     @Override
     public void render(DrawContext ctx, int mx, int my, float delta) {
         win = mc.getWindow().getHandle();
@@ -105,14 +116,16 @@ public final class ClickGuiScreen extends Screen {
         open = RenderUtil.approach(open, 1f, dt * 5f);
         handleKeys();
 
-        if (NexusClient.GUI_CFG.blur()) super.render(ctx, mx, my, delta);
-        else ctx.fill(0, 0, width, height, RenderUtil.alpha(0xFF000000, 0.5f * open));
+        ClickGuiModule cfg = NexusClient.GUI_CFG;
+        int accent = cfg.accent();
+        if (cfg.blur()) super.render(ctx, mx, my, delta);
+        else ctx.fill(0, 0, width, height, RenderUtil.alpha(0xFF000000, 0.45f * open));
+        ctx.fillGradient(0, 0, width, height, RenderUtil.alpha(accent, 0.12f * open), RenderUtil.alpha(0xFF000000, 0.40f * open));
 
         tooltip = null;
         bounds.clear();
-        drawSearch(ctx);
+        drawChrome(ctx, accent);
 
-        // Default positions: centered row over every category that has modules (kept when searching).
         List<Category> all = new ArrayList<>();
         for (Category c : Category.values()) if (!NexusClient.MODULES.inCategory(c).isEmpty()) all.add(c);
         int total = all.size() * PW + Math.max(0, all.size() - 1) * GAP;
@@ -127,53 +140,64 @@ public final class ClickGuiScreen extends Screen {
             if (p != null) { p[0] = mx - dragDx; p[1] = my - dragDy; }
         }
 
-        int slide = Math.round((1f - open) * -10f);
+        int slide = Math.round((1f - open) * -12f);
         for (Category c : all) {
             int[] p = POS.get(c);
             p[0] = Math.max(0, Math.min(Math.max(0, width - PW), p[0]));
             p[1] = Math.max(0, Math.min(Math.max(0, height - HEADER), p[1]));
             List<Module> mods = modulesFor(c);
             if (mods.isEmpty()) continue;
-            drawPanel(ctx, c, mods, p[0], p[1] + slide, mx, my, lClick, rClick);
+            drawPanel(ctx, c, mods, p[0], p[1] + slide, mx, my, lClick, rClick, accent);
         }
 
         if (tooltip != null) {
             int tw = RenderUtil.width(tooltip);
-            ctx.fill(mx + 6, my + 6, mx + 14 + tw, my + 19, 0xF0101018);
-            RenderUtil.text(ctx, tooltip, mx + 10, my + 9, TEXT);
+            RenderUtil.roundRect(ctx, mx + 8, my + 8, mx + 18 + tw, my + 22, 3, 0xF0101018);
+            RenderUtil.roundRect(ctx, mx + 8, my + 8, mx + 10, my + 22, 1, accent);
+            RenderUtil.text(ctx, tooltip, mx + 13, my + 12, TEXT);
         }
     }
 
-    private void drawSearch(DrawContext ctx) {
-        int sw = 170, sx = (width - sw) / 2, sy = 8;
-        ctx.fill(sx, sy, sx + sw, sy + 16, RenderUtil.alpha(HEAD_BG, open));
-        ctx.fill(sx, sy + 15, sx + sw, sy + 16, RenderUtil.alpha(NexusClient.GUI_CFG.accent(), open));
+    /** Logo, search bar and hint line. */
+    private void drawChrome(DrawContext ctx, int accent) {
+        float a = open;
+        ctx.drawText(mc.textRenderer, Text.literal("NEXUS").formatted(Formatting.BOLD), 12, 10,
+                RenderUtil.alpha(accent, a), true);
+        RenderUtil.text(ctx, "client  " + NexusClient.CONFIG.currentProfile(), 12, 22, RenderUtil.alpha(DIM, a));
+
+        int sw = 200, sx = (width - sw) / 2, sy = 10;
+        RenderUtil.roundRect(ctx, sx - 1, sy - 1, sx + sw + 1, sy + 21, 6, RenderUtil.alpha(accent, 0.35f * a));
+        RenderUtil.roundRect(ctx, sx, sy, sx + sw, sy + 20, 5, RenderUtil.alpha(HEAD_BG, 0.96f * a));
         boolean caret = (System.currentTimeMillis() / 500L) % 2 == 0;
-        String shown = search.isEmpty() ? "Type to search..." : search + (caret ? "_" : "");
-        RenderUtil.text(ctx, shown, sx + 6, sy + 4, RenderUtil.alpha(search.isEmpty() ? DIM : TEXT, open));
+        String shown = search.isEmpty() ? "Search modules..." : search + (caret ? "_" : "");
+        RenderUtil.text(ctx, shown, sx + 8, sy + 6, RenderUtil.alpha(search.isEmpty() ? DIM : TEXT, a));
+
+        String hint = "Right-click: settings   Drag header: move   Scroll: panel   Esc: close";
+        RenderUtil.text(ctx, hint, (width - RenderUtil.width(hint)) / 2, height - 12, RenderUtil.alpha(DIM, 0.8f * a));
     }
 
     private int contentHeight(List<Module> mods) {
         int h = 0;
         for (Module m : mods) {
-            h += ROW;
+            h += ROW + RGAP;
             float p = progress.getOrDefault(m, 0f);
             if (p > 0.001f) {
                 int vis = 0;
                 for (Setting<?> s : m.getSettings()) if (s.isVisible()) vis++;
-                h += Math.round((vis + 1) * SROW * p);
+                h += Math.round((vis + 1) * SROW * p) + 2;
             }
         }
         return h;
     }
 
     private void drawPanel(DrawContext ctx, Category cat, List<Module> mods, int x, int y,
-                           int mx, int my, boolean lClick, boolean rClick) {
-        int accent = NexusClient.GUI_CFG.accent();
+                           int mx, int my, boolean lClick, boolean rClick, int accent) {
         float a = open;
+        int accent2 = NexusClient.GUI_CFG.accent2();
 
         int contentH = contentHeight(mods);
-        int maxVisible = Math.max(2 * ROW, height - y - HEADER - 8);
+        int top = y + HEADER + 3;
+        int maxVisible = Math.max(2 * ROW, height - top - 14);
         int visibleH = Math.min(contentH, maxVisible);
         int maxScroll = Math.max(0, contentH - visibleH);
         float[] sc = scroll.computeIfAbsent(cat, k -> new float[2]);
@@ -181,13 +205,26 @@ public final class ClickGuiScreen extends Screen {
         sc[1] += (sc[0] - sc[1]) * Math.min(1f, dt * 14f);
         if (Math.abs(sc[0] - sc[1]) < 0.3f) sc[1] = sc[0];
         int off = Math.round(sc[1]);
-        bounds.put(cat, new int[] { x, y, PW, HEADER + visibleH + 1 });
+        int bottom = top + visibleH;
+        int boxBottom = bottom + 4;
+        bounds.put(cat, new int[] { x, y, PW, boxBottom - y });
 
-        ctx.fill(x, y, x + PW, y + HEADER, RenderUtil.alpha(HEAD_BG, a));
-        ctx.fill(x, y + HEADER - 1, x + PW, y + HEADER, RenderUtil.alpha(accent, a));
-        RenderUtil.text(ctx, cat.getDisplayName(), x + PAD, y + 6, RenderUtil.alpha(TEXT, a));
+        // soft shadow, body, header
+        RenderUtil.roundRect(ctx, x - 3, y - 2, x + PW + 3, boxBottom + 4, 9, RenderUtil.alpha(0xFF000000, 0.14f * a));
+        RenderUtil.roundRect(ctx, x - 1, y - 1, x + PW + 1, boxBottom + 2, 7, RenderUtil.alpha(0xFF000000, 0.22f * a));
+        RenderUtil.roundRect(ctx, x, y, x + PW, boxBottom, 6, RenderUtil.alpha(PANEL_BG, a));
+        RenderUtil.roundRect(ctx, x, y, x + PW, y + HEADER, 6, RenderUtil.alpha(HEAD_BG, a));
+        ctx.fillGradient(x + 3, y + 2, x + PW - 3, y + HEADER - 2,
+                RenderUtil.alpha(accent2, 0.38f * a), RenderUtil.alpha(HEAD_BG, 0.0f));
+        ctx.fill(x + 8, y + HEADER - 1, x + PW - 8, y + HEADER, RenderUtil.alpha(accent, 0.9f * a));
+
+        // category badge + title
+        RenderUtil.roundRect(ctx, x + PAD - 1, y + 6, x + PAD + 11, y + 18, 3, RenderUtil.alpha(accent, 0.9f * a));
+        String letter = cat.getDisplayName().substring(0, 1);
+        RenderUtil.text(ctx, letter, x + PAD + 5 - RenderUtil.width(letter) / 2, y + 8, RenderUtil.alpha(0xFF101018, a));
+        RenderUtil.text(ctx, cat.getDisplayName(), x + PAD + 16, y + 8, RenderUtil.alpha(TEXT, a));
         String cnt = Integer.toString(mods.size());
-        RenderUtil.text(ctx, cnt, x + PW - PAD - RenderUtil.width(cnt), y + 6, RenderUtil.alpha(DIM, a));
+        RenderUtil.text(ctx, cnt, x + PW - PAD - RenderUtil.width(cnt), y + 8, RenderUtil.alpha(DIM, a));
 
         boolean hoverHeader = mx >= x && mx < x + PW && my >= y && my < y + HEADER;
         if (hoverHeader) {
@@ -195,51 +232,50 @@ public final class ClickGuiScreen extends Screen {
             if (lClick && dragging == null) { dragging = cat; dragDx = mx - x; dragDy = my - y; }
         }
 
-        int top = y + HEADER;
-        int bottom = top + visibleH;
         clipTop = top;
         clipBottom = bottom;
+        int rx = x + IP;
 
         ctx.enableScissor(x, top, x + PW, bottom);
         int cy = top - off;
         for (Module m : mods) {
-            boolean hover = mx >= x && mx < x + PW && my >= cy && my < cy + ROW && my >= top && my < bottom;
-            ctx.fill(x, cy, x + PW, cy + ROW, RenderUtil.alpha(ROW_BG, a));
-            if (m.isEnabled()) {
-                ctx.fill(x, cy, x + PW, cy + ROW, RenderUtil.alpha(accent, 0.30f * a));
-                ctx.fill(x, cy, x + 2, cy + ROW, RenderUtil.alpha(accent, a));
+            boolean hover = mx >= rx && mx < rx + RW && my >= cy && my < cy + ROW && my >= top && my < bottom;
+            float en = anim(enAnim, m, m.isEnabled(), 10f);
+            float hv = anim(hvAnim, m, hover, 14f);
+
+            RenderUtil.roundRect(ctx, rx, cy, rx + RW, cy + ROW, 4, RenderUtil.alpha(ROW_BG, a));
+            if (en > 0.01f) {
+                RenderUtil.roundRect(ctx, rx, cy, rx + RW, cy + ROW, 4, RenderUtil.alpha(accent, 0.26f * en * a));
+                RenderUtil.roundRect(ctx, rx + 1, cy + 4, rx + 3, cy + ROW - 4, 1, RenderUtil.alpha(accent, en * a));
             }
+            if (hv > 0.01f) RenderUtil.roundRect(ctx, rx, cy, rx + RW, cy + ROW, 4, RenderUtil.alpha(0x30FFFFFF, hv * a));
+
             if (hover) {
-                ctx.fill(x, cy, x + PW, cy + ROW, RenderUtil.alpha(HOVER, a));
                 tooltip = m.getDescription();
                 if (lClick && !(m instanceof ClickGuiModule)) m.toggle();
                 if (rClick) {
                     if (!expanded.remove(m)) expanded.add(m);
                 }
             }
-            RenderUtil.text(ctx, m.getName(), x + PAD + 2, cy + 5,
-                    RenderUtil.alpha(m.isEnabled() ? TEXT : 0xFFB0B0C4, a));
+            RenderUtil.text(ctx, m.getName(), rx + 8, cy + 5, RenderUtil.alpha(RenderUtil.lerp(OFF_TEXT, TEXT, en), a));
             String sign = expanded.contains(m) ? "-" : "+";
-            RenderUtil.text(ctx, sign, x + PW - PAD - RenderUtil.width(sign), cy + 5, RenderUtil.alpha(DIM, a));
-            cy += ROW;
+            RenderUtil.text(ctx, sign, rx + RW - 8 - RenderUtil.width(sign), cy + 5, RenderUtil.alpha(DIM, a));
+            cy += ROW + RGAP;
 
-            float target = expanded.contains(m) ? 1f : 0f;
-            float p = RenderUtil.approach(progress.getOrDefault(m, 0f), target, dt * 8f);
+            float p = RenderUtil.approach(progress.getOrDefault(m, 0f), expanded.contains(m) ? 1f : 0f, dt * 8f);
             progress.put(m, p);
-            if (p > 0.001f) cy += drawSettings(ctx, m, x, cy, p, mx, my, lClick);
+            if (p > 0.001f) cy += drawSettings(ctx, m, rx, cy, p, mx, my, lClick, accent) + 2;
         }
         ctx.disableScissor();
 
         if (maxScroll > 0) {
-            int barH = Math.max(12, visibleH * visibleH / contentH);
+            int barH = Math.max(14, visibleH * visibleH / contentH);
             int barY = top + Math.round((visibleH - barH) * (sc[1] / maxScroll));
-            ctx.fill(x + PW - 2, barY, x + PW, barY + barH, RenderUtil.alpha(accent, a));
+            RenderUtil.roundRect(ctx, x + PW - 3, barY, x + PW - 1, barY + barH, 1, RenderUtil.alpha(accent, 0.85f * a));
         }
-        ctx.fill(x, bottom, x + PW, bottom + 1, RenderUtil.alpha(accent, a));
     }
 
-    private int drawSettings(DrawContext ctx, Module m, int x, int y, float p, int mx, int my, boolean lClick) {
-        int accent = NexusClient.GUI_CFG.accent();
+    private int drawSettings(DrawContext ctx, Module m, int x, int y, float p, int mx, int my, boolean lClick, int accent) {
         float a = open;
         List<Setting<?>> vis = new ArrayList<>();
         for (Setting<?> s : m.getSettings()) if (s.isVisible()) vis.add(s);
@@ -247,30 +283,34 @@ public final class ClickGuiScreen extends Screen {
         int h = Math.round(full * p);
         boolean inClip = my >= clipTop && my < clipBottom;
 
-        ctx.enableScissor(x, y, x + PW, y + h);
+        ctx.enableScissor(x, y, x + RW, y + h);
+        RenderUtil.roundRect(ctx, x, y, x + RW, y + full, 4, RenderUtil.alpha(SET_BG, a));
         int ry = y;
         for (Setting<?> s : vis) {
-            boolean hov = inClip && mx >= x && mx < x + PW && my >= ry && my < ry + SROW && my < y + h;
-            ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(SET_BG, a));
+            boolean hov = inClip && mx >= x && mx < x + RW && my >= ry && my < ry + SROW && my < y + h;
             if (hov) {
-                ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(HOVER, a));
+                ctx.fill(x + 2, ry, x + RW - 2, ry + SROW, RenderUtil.alpha(0x22FFFFFF, a));
                 tooltip = s.getDescription();
             }
             int tcol = RenderUtil.alpha(TEXT, a);
             if (s instanceof BoolSetting b) {
                 RenderUtil.text(ctx, b.getName(), x + PAD, ry + 4, tcol);
-                int bx = x + PW - PAD - 10, by = ry + 3;
-                ctx.fill(bx, by, bx + 9, by + 9, RenderUtil.alpha(BOX, a));
-                if (b.get()) ctx.fill(bx + 2, by + 2, bx + 7, by + 7, RenderUtil.alpha(accent, a));
+                float t = anim(enAnim, s, b.get(), 14f);
+                int tx = x + RW - PAD - 20, ty = ry + 3;
+                RenderUtil.roundRect(ctx, tx, ty, tx + 20, ty + 10, 5, RenderUtil.alpha(RenderUtil.lerp(BOX, accent, t), a));
+                int kx = tx + 1 + Math.round(t * 10f);
+                RenderUtil.roundRect(ctx, kx, ty + 1, kx + 8, ty + 9, 4, RenderUtil.alpha(0xFFFFFFFF, a));
                 if (hov && lClick) b.toggle();
             } else if (s instanceof NumberSetting n) {
                 RenderUtil.text(ctx, n.getName(), x + PAD, ry + 1, tcol);
                 String val = fmt(n);
-                RenderUtil.text(ctx, val, x + PW - PAD - RenderUtil.width(val), ry + 1, RenderUtil.alpha(DIM, a));
-                int sx = x + PAD, sw = PW - 2 * PAD, by = ry + SROW - 4;
-                ctx.fill(sx, by, sx + sw, by + 2, RenderUtil.alpha(BOX, a));
+                RenderUtil.text(ctx, val, x + RW - PAD - RenderUtil.width(val), ry + 1, RenderUtil.alpha(DIM, a));
+                int sx = x + PAD, sw = RW - 2 * PAD, by = ry + SROW - 5;
                 double t = (n.get() - n.getMin()) / (n.getMax() - n.getMin());
-                ctx.fill(sx, by, sx + (int) (sw * t), by + 2, RenderUtil.alpha(accent, a));
+                int fillW = (int) (sw * t);
+                RenderUtil.roundRect(ctx, sx, by, sx + sw, by + 3, 1, RenderUtil.alpha(BOX, a));
+                RenderUtil.roundRect(ctx, sx, by, sx + Math.max(2, fillW), by + 3, 1, RenderUtil.alpha(accent, a));
+                RenderUtil.roundRect(ctx, sx + fillW - 2, by - 1, sx + fillW + 3, by + 4, 2, RenderUtil.alpha(0xFFFFFFFF, a));
                 if (hov && lClick) { slider = n; sliderX = sx; sliderW = sw; }
                 if (slider == n) {
                     double nt = Math.max(0.0, Math.min(1.0, (mx - sliderX) / (double) sliderW));
@@ -279,27 +319,30 @@ public final class ClickGuiScreen extends Screen {
             } else if (s instanceof ModeSetting md) {
                 RenderUtil.text(ctx, md.getName(), x + PAD, ry + 4, tcol);
                 String v = md.get();
-                RenderUtil.text(ctx, v, x + PW - PAD - RenderUtil.width(v), ry + 4, RenderUtil.alpha(accent, a));
+                int vw = RenderUtil.width(v);
+                RenderUtil.roundRect(ctx, x + RW - PAD - vw - 8, ry + 2, x + RW - PAD, ry + SROW - 2, 3, RenderUtil.alpha(accent, 0.22f * a));
+                RenderUtil.text(ctx, v, x + RW - PAD - vw - 4, ry + 4, RenderUtil.alpha(accent, a));
                 if (hov && lClick) md.cycle();
             } else if (s instanceof ColorSetting cs) {
                 RenderUtil.text(ctx, cs.getName() + (cs.isRainbow() ? " (rainbow)" : ""), x + PAD, ry + 4, tcol);
-                int bx = x + PW - PAD - 10, by = ry + 3;
-                ctx.fill(bx, by, bx + 9, by + 9, cs.color());
+                int bx = x + RW - PAD - 12, by = ry + 3;
+                RenderUtil.roundRect(ctx, bx, by, bx + 12, by + 10, 3, RenderUtil.alpha(cs.color(), a));
                 if (hov && lClick) cs.setRainbow(!cs.isRainbow());
             }
             ry += SROW;
         }
 
-        boolean hovBind = inClip && mx >= x && mx < x + PW && my >= ry && my < ry + SROW && my < y + h;
-        ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(SET_BG, a));
+        boolean hovBind = inClip && mx >= x && mx < x + RW && my >= ry && my < ry + SROW && my < y + h;
         if (hovBind) {
-            ctx.fill(x, ry, x + PW, ry + SROW, RenderUtil.alpha(HOVER, a));
+            ctx.fill(x + 2, ry, x + RW - 2, ry + SROW, RenderUtil.alpha(0x22FFFFFF, a));
             tooltip = "Click, then press a key. Backspace clears.";
             if (lClick) { listening = m; snapshotKeys(); }
         }
         RenderUtil.text(ctx, "Bind", x + PAD, ry + 4, RenderUtil.alpha(TEXT, a));
         String kn = listening == m ? "..." : keyName(m.getKeyBind());
-        RenderUtil.text(ctx, kn, x + PW - PAD - RenderUtil.width(kn), ry + 4, RenderUtil.alpha(accent, a));
+        int kw = RenderUtil.width(kn);
+        RenderUtil.roundRect(ctx, x + RW - PAD - kw - 8, ry + 2, x + RW - PAD, ry + SROW - 2, 3, RenderUtil.alpha(BOX, a));
+        RenderUtil.text(ctx, kn, x + RW - PAD - kw - 4, ry + 4, RenderUtil.alpha(accent, a));
         ctx.disableScissor();
         return h;
     }

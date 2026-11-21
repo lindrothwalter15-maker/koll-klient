@@ -20,11 +20,15 @@ public final class DamageUtil {
 
     private DamageUtil() {}
 
-    public static float crystal(LivingEntity e, Vec3d pos) {
-        double dist = Math.sqrt(e.squaredDistanceTo(pos)) / 12.0;
+    public static float crystal(LivingEntity e, Vec3d pos) { return explosion(e, pos, 6f); }
+
+    /** Explosion damage estimate for a given power (crystal 6, TNT minecart about 4-5, TNT 4). */
+    public static float explosion(LivingEntity e, Vec3d pos, float power) {
+        double size = power * 2.0;
+        double dist = Math.sqrt(e.squaredDistanceTo(pos)) / size;
         if (dist > 1.0) return 0f;
         double impact = (1.0 - dist) * exposure(pos, e);
-        float dmg = (float) ((impact * impact + impact) / 2.0 * 7.0 * 12.0 + 1.0);
+        float dmg = (float) ((impact * impact + impact) / 2.0 * 7.0 * size + 1.0);
 
         if (e instanceof PlayerEntity && mc.world != null) {
             switch (mc.world.getDifficulty()) {
