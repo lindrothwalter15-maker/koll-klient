@@ -42,6 +42,7 @@ public final class KillAuraModule extends Module {
             target = null;
             return;
         }
+        if (CombatBotModule.EATING) return;
         target = TargetUtil.best(range.get(), players.get(), mobs.get(), walls.get(), priority.is("Health"));
         if (target == null) return;
         TargetUtil.report(target);

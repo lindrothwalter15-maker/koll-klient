@@ -9,10 +9,13 @@ import dev.nexus.module.ModuleManager;
 import dev.nexus.module.modules.AutoTotemModule;
 import dev.nexus.module.modules.BowAimModule;
 import dev.nexus.module.modules.ClickGuiModule;
+import dev.nexus.module.modules.CombatBotModule;
 import dev.nexus.module.modules.CrystalAuraModule;
 import dev.nexus.module.modules.HudModule;
 import dev.nexus.module.modules.KillAuraModule;
 import dev.nexus.module.modules.SprintModule;
+import dev.nexus.module.modules.TriggerBotModule;
+import dev.nexus.module.modules.WTapModule;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -44,6 +47,9 @@ public final class NexusClient implements ClientModInitializer {
         MODULES.register(new CrystalAuraModule());
         MODULES.register(new AutoTotemModule());
         MODULES.register(new BowAimModule());
+        MODULES.register(new TriggerBotModule());
+        MODULES.register(new WTapModule());
+        MODULES.register(new CombatBotModule());
         MODULES.register(new SprintModule());
         // Combat modules are registered here in later stages.
 
