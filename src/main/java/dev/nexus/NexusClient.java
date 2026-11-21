@@ -6,8 +6,12 @@ import dev.nexus.event.Render2DEvent;
 import dev.nexus.event.TickEvent;
 import dev.nexus.module.Module;
 import dev.nexus.module.ModuleManager;
+import dev.nexus.module.modules.AutoTotemModule;
+import dev.nexus.module.modules.BowAimModule;
 import dev.nexus.module.modules.ClickGuiModule;
+import dev.nexus.module.modules.CrystalAuraModule;
 import dev.nexus.module.modules.HudModule;
+import dev.nexus.module.modules.KillAuraModule;
 import dev.nexus.module.modules.SprintModule;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -36,6 +40,10 @@ public final class NexusClient implements ClientModInitializer {
         HudModule hud = new HudModule();
         MODULES.register(GUI_CFG);
         MODULES.register(hud);
+        MODULES.register(new KillAuraModule());
+        MODULES.register(new CrystalAuraModule());
+        MODULES.register(new AutoTotemModule());
+        MODULES.register(new BowAimModule());
         MODULES.register(new SprintModule());
         // Combat modules are registered here in later stages.
 
