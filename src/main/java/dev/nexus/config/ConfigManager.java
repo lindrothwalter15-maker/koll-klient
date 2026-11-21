@@ -14,6 +14,8 @@ import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Stream;
 
 /**
@@ -28,6 +30,11 @@ public final class ConfigManager {
     private final Path profiles = root.resolve("profiles");
     private final Path clientFile = root.resolve("client.json");
     private String current = "default";
+    private final ExecutorService io = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "Nexus-IO");
+        t.setDaemon(true);
+        return t;
+    });
 
     public String currentProfile() { return current; }
 
@@ -90,6 +97,26 @@ public final class ConfigManager {
             NexusClient.LOGGER.error("Failed to save profile {}", name, e);
             return false;
         }
+    }
+
+    /** Builds the JSON on the calling thread, writes it on a background thread (no main-thread disk I/O). */
+    public void saveAsync(String name) {
+        final String n = sanitize(name);
+        JsonObject modules = new JsonObject();
+        for (Module m : NexusClient.MODULES.all()) modules.add(m.getName(), writeModule(m));
+        JsonObject out = new JsonObject();
+        out.addProperty("version", 1);
+        out.add("modules", modules);
+        final String json = GSON.toJson(out);
+        current = n;
+        io.execute(() -> {
+            try {
+                Files.createDirectories(profiles);
+                writeAtomic(profiles.resolve(n + ".json"), json);
+            } catch (IOException e) {
+                NexusClient.LOGGER.error("Async save failed for profile {}", n, e);
+            }
+        });
     }
 
     public boolean delete(String name) {
