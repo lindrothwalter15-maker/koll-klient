@@ -75,7 +75,7 @@ public final class CrystalAuraModule extends Module {
         float bestScore = -Float.MAX_VALUE;
         for (Entity e : mc.world.getEntities()) {
             if (!(e instanceof EndCrystalEntity c) || !c.isAlive()) continue;
-            Vec3d p = c.getPos();
+            Vec3d p = new Vec3d(c.getX(), c.getY(), c.getZ());
             if (eye.squaredDistanceTo(p) > rsq) continue;
             float dt = DamageUtil.crystal(target, p);
             float ds = DamageUtil.crystal(mc.player, p);
