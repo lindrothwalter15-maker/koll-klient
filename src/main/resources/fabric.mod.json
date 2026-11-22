@@ -6,6 +6,7 @@
   "description": "Modular PvP client framework.",
   "authors": ["You"],
   "environment": "client",
+  "mixins": ["nexus.mixins.json"],
   "entrypoints": {
     "client": ["dev.nexus.NexusClient"]
   },
