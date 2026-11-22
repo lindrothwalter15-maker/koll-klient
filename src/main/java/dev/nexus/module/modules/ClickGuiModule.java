@@ -15,6 +15,7 @@ public final class ClickGuiModule extends Module {
             "Violet", "Ocean", "Crimson", "Emerald", "Sunset", "Rainbow", "Custom"));
     private final ColorSetting custom = add(new ColorSetting("Custom", "Custom accent color (click = rainbow)", 0xFF8B5CF6));
     private final BoolSetting blur = add(new BoolSetting("Blur", "Blur the game behind the menu", true));
+    private final BoolSetting sounds = add(new BoolSetting("Sounds", "Click sounds in the menu", true));
 
     public ClickGuiModule() {
         super("ClickGUI", "Opens the module menu", Category.RENDER);
@@ -54,6 +55,8 @@ public final class ClickGuiModule extends Module {
     }
 
     public boolean blur() { return blur.get(); }
+
+    public boolean sounds() { return sounds.get(); }
 
     @Override
     protected void onEnable() {

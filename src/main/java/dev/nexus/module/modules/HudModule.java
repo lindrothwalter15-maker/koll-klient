@@ -7,6 +7,7 @@ import dev.nexus.module.Category;
 import dev.nexus.module.Module;
 import dev.nexus.render.RenderUtil;
 import dev.nexus.setting.BoolSetting;
+import dev.nexus.setting.ColorSetting;
 import dev.nexus.util.TargetUtil;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.client.gui.DrawContext;
@@ -31,6 +32,9 @@ public final class HudModule extends Module {
     private final BoolSetting showModules = add(new BoolSetting("ArrayList", "List enabled modules", true));
     private final BoolSetting showTarget = add(new BoolSetting("TargetHUD", "Show current combat target", true));
     private final BoolSetting background = add(new BoolSetting("Background", "Dark panel behind text", true));
+    private final ColorSetting textColor = add(new ColorSetting("TextColor", "Color of the info text", 0xFFFFFFFF));
+    private final BoolSetting useTheme = add(new BoolSetting("ThemeBars", "Use the menu theme for bars and list", true));
+    private final ColorSetting barColor = add(new ColorSetting("BarColor", "Color of bars and list", 0xFF8B5CF6));
 
     private final String[] lines = new String[5];
     private int lineCount;
@@ -41,6 +45,7 @@ public final class HudModule extends Module {
 
     public HudModule() {
         super("HUD", "Heads-up display", Category.HUD);
+        barColor.visibleWhen(() -> !useTheme.get());
         listen(TickEvent.class, e -> update());
         listen(Render2DEvent.class, this::render);
     }
@@ -104,13 +109,14 @@ public final class HudModule extends Module {
     private void render(Render2DEvent e) {
         if (mc.player == null) return;
         DrawContext c = e.context;
-        int accent = NexusClient.GUI_CFG.accent();
+        int accent = useTheme.get() ? NexusClient.GUI_CFG.accent() : barColor.color();
+        int txt = textColor.color();
 
         if (lineCount > 0) {
             int h = lineCount * 11 + 4;
             if (background.get()) c.fill(2, 2, 2 + lineWidth + 10, 2 + h, 0x90000000);
             c.fill(2, 2, 4, 2 + h, accent);
-            for (int i = 0; i < lineCount; i++) RenderUtil.text(c, lines[i], 8, 5 + i * 11, 0xFFFFFFFF);
+            for (int i = 0; i < lineCount; i++) RenderUtil.text(c, lines[i], 8, 5 + i * 11, txt);
         }
 
         if (showTarget.get()) {
@@ -157,7 +163,7 @@ public final class HudModule extends Module {
             int y = 3;
             for (int i = 0; i < ls.length; i++) {
                 int x = e.width - ws[i] - 8;
-                int col = NexusClient.GUI_CFG.accentAt(i);
+                int col = useTheme.get() ? NexusClient.GUI_CFG.accentAt(i) : barColor.color();
                 if (background.get()) c.fill(x - 3, y, e.width, y + 11, 0x90000000);
                 c.fill(e.width - 2, y, e.width, y + 11, col);
                 RenderUtil.text(c, ls[i], x, y + 2, col);

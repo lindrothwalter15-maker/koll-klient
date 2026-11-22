@@ -13,10 +13,13 @@ import dev.nexus.setting.Setting;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.sound.PositionedSoundInstance;
+import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import org.lwjgl.glfw.GLFW;
 
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -34,7 +37,7 @@ import java.util.Set;
  */
 public final class ClickGuiScreen extends Screen {
     private static final int PW = 126, IP = 4, RW = PW - 2 * IP, HEADER = 24, ROW = 18, RGAP = 2, SROW = 16;
-    private static final int GAP = 10, PAD = 7, TOP = 44;
+    private static final int GAP = 10, PAD = 7, TOP = 44, PICK_H = 70;
     private static final int PANEL_BG = 0xF0101018, HEAD_BG = 0xFF161622, ROW_BG = 0xFF1B1B2A, SET_BG = 0xFF131320;
     private static final int BOX = 0xFF2E2E44, TEXT = 0xFFF2F2FC, DIM = 0xFF8E8EA8, OFF_TEXT = 0xFFB6B6CC;
 
@@ -63,6 +66,10 @@ public final class ClickGuiScreen extends Screen {
     private Category dragging;
     private int dragDx, dragDy;
     private int clipTop, clipBottom;
+    private final Set<Setting<?>> pickers = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<ColorSetting, float[]> hsbs = new IdentityHashMap<>();
+    private int pickDrag, pickX, pickY, pickW, pickH;
+    private ColorSetting pickSetting;
 
     public ClickGuiScreen() {
         super(Text.literal("Nexus"));
@@ -111,7 +118,7 @@ public final class ClickGuiScreen extends Screen {
         boolean rClick = r && !prevR;
         prevL = l;
         prevR = r;
-        if (!l) { slider = null; dragging = null; }
+        if (!l) { slider = null; dragging = null; pickDrag = 0; pickSetting = null; }
 
         open = RenderUtil.approach(open, 1f, dt * 5f);
         handleKeys();
@@ -181,11 +188,7 @@ public final class ClickGuiScreen extends Screen {
         for (Module m : mods) {
             h += ROW + RGAP;
             float p = progress.getOrDefault(m, 0f);
-            if (p > 0.001f) {
-                int vis = 0;
-                for (Setting<?> s : m.getSettings()) if (s.isVisible()) vis++;
-                h += Math.round((vis + 1) * SROW * p) + 2;
-            }
+            if (p > 0.001f) h += Math.round(settingsFull(m) * p) + 2;
         }
         return h;
     }
@@ -252,9 +255,10 @@ public final class ClickGuiScreen extends Screen {
 
             if (hover) {
                 tooltip = m.getDescription();
-                if (lClick && !(m instanceof ClickGuiModule)) m.toggle();
+                if (lClick && !(m instanceof ClickGuiModule)) { m.toggle(); click(m.isEnabled() ? 1.25f : 0.85f); }
                 if (rClick) {
                     if (!expanded.remove(m)) expanded.add(m);
+                    click(1.1f);
                 }
             }
             RenderUtil.text(ctx, m.getName(), rx + 8, cy + 5, RenderUtil.alpha(RenderUtil.lerp(OFF_TEXT, TEXT, en), a));
@@ -279,7 +283,7 @@ public final class ClickGuiScreen extends Screen {
         float a = open;
         List<Setting<?>> vis = new ArrayList<>();
         for (Setting<?> s : m.getSettings()) if (s.isVisible()) vis.add(s);
-        int full = (vis.size() + 1) * SROW;
+        int full = settingsFull(m);
         int h = Math.round(full * p);
         boolean inClip = my >= clipTop && my < clipBottom;
 
@@ -292,6 +296,7 @@ public final class ClickGuiScreen extends Screen {
                 ctx.fill(x + 2, ry, x + RW - 2, ry + SROW, RenderUtil.alpha(0x22FFFFFF, a));
                 tooltip = s.getDescription();
             }
+            int extra = 0;
             int tcol = RenderUtil.alpha(TEXT, a);
             if (s instanceof BoolSetting b) {
                 RenderUtil.text(ctx, b.getName(), x + PAD, ry + 4, tcol);
@@ -300,7 +305,7 @@ public final class ClickGuiScreen extends Screen {
                 RenderUtil.roundRect(ctx, tx, ty, tx + 20, ty + 10, 5, RenderUtil.alpha(RenderUtil.lerp(BOX, accent, t), a));
                 int kx = tx + 1 + Math.round(t * 10f);
                 RenderUtil.roundRect(ctx, kx, ty + 1, kx + 8, ty + 9, 4, RenderUtil.alpha(0xFFFFFFFF, a));
-                if (hov && lClick) b.toggle();
+                if (hov && lClick) { b.toggle(); click(b.get() ? 1.25f : 0.85f); }
             } else if (s instanceof NumberSetting n) {
                 RenderUtil.text(ctx, n.getName(), x + PAD, ry + 1, tcol);
                 String val = fmt(n);
@@ -311,7 +316,7 @@ public final class ClickGuiScreen extends Screen {
                 RenderUtil.roundRect(ctx, sx, by, sx + sw, by + 3, 1, RenderUtil.alpha(BOX, a));
                 RenderUtil.roundRect(ctx, sx, by, sx + Math.max(2, fillW), by + 3, 1, RenderUtil.alpha(accent, a));
                 RenderUtil.roundRect(ctx, sx + fillW - 2, by - 1, sx + fillW + 3, by + 4, 2, RenderUtil.alpha(0xFFFFFFFF, a));
-                if (hov && lClick) { slider = n; sliderX = sx; sliderW = sw; }
+                if (hov && lClick) { slider = n; sliderX = sx; sliderW = sw; click(1.0f); }
                 if (slider == n) {
                     double nt = Math.max(0.0, Math.min(1.0, (mx - sliderX) / (double) sliderW));
                     n.set(n.getMin() + nt * (n.getMax() - n.getMin()));
@@ -322,21 +327,23 @@ public final class ClickGuiScreen extends Screen {
                 int vw = RenderUtil.width(v);
                 RenderUtil.roundRect(ctx, x + RW - PAD - vw - 8, ry + 2, x + RW - PAD, ry + SROW - 2, 3, RenderUtil.alpha(accent, 0.22f * a));
                 RenderUtil.text(ctx, v, x + RW - PAD - vw - 4, ry + 4, RenderUtil.alpha(accent, a));
-                if (hov && lClick) md.cycle();
+                if (hov && lClick) { md.cycle(); click(1.0f); }
             } else if (s instanceof ColorSetting cs) {
                 RenderUtil.text(ctx, cs.getName() + (cs.isRainbow() ? " (rainbow)" : ""), x + PAD, ry + 4, tcol);
-                int bx = x + RW - PAD - 12, by = ry + 3;
-                RenderUtil.roundRect(ctx, bx, by, bx + 12, by + 10, 3, RenderUtil.alpha(cs.color(), a));
-                if (hov && lClick) cs.setRainbow(!cs.isRainbow());
+                int bx = x + RW - PAD - 14, by = ry + 3;
+                RenderUtil.roundRect(ctx, bx - 1, by - 1, bx + 15, by + 11, 4, RenderUtil.alpha(0xFFFFFFFF, 0.35f * a));
+                RenderUtil.roundRect(ctx, bx, by, bx + 14, by + 10, 3, RenderUtil.alpha(cs.color(), a));
+                if (hov && lClick) togglePicker(cs);
+                if (pickers.contains(cs)) extra = drawPicker(ctx, cs, x, ry + SROW, mx, my, lClick, inClip && my < y + h);
             }
-            ry += SROW;
+            ry += SROW + extra;
         }
 
         boolean hovBind = inClip && mx >= x && mx < x + RW && my >= ry && my < ry + SROW && my < y + h;
         if (hovBind) {
             ctx.fill(x + 2, ry, x + RW - 2, ry + SROW, RenderUtil.alpha(0x22FFFFFF, a));
             tooltip = "Click, then press a key. Backspace clears.";
-            if (lClick) { listening = m; snapshotKeys(); }
+            if (lClick) { listening = m; snapshotKeys(); click(1.0f); }
         }
         RenderUtil.text(ctx, "Bind", x + PAD, ry + 4, RenderUtil.alpha(TEXT, a));
         String kn = listening == m ? "..." : keyName(m.getKeyBind());
@@ -345,6 +352,91 @@ public final class ClickGuiScreen extends Screen {
         RenderUtil.text(ctx, kn, x + RW - PAD - kw - 4, ry + 4, RenderUtil.alpha(accent, a));
         ctx.disableScissor();
         return h;
+    }
+
+    private int settingsFull(Module m) {
+        int f = SROW; // bind row
+        for (Setting<?> s : m.getSettings()) {
+            if (!s.isVisible()) continue;
+            f += SROW;
+            if (s instanceof ColorSetting && pickers.contains(s)) f += PICK_H;
+        }
+        return f;
+    }
+
+    private void click(float pitch) {
+        if (!NexusClient.GUI_CFG.sounds()) return;
+        // NOTE: PositionedSoundInstance.master with a RegistryEntry is the 1.21.x API. Verify on compile.
+        mc.getSoundManager().play(PositionedSoundInstance.master(SoundEvents.UI_BUTTON_CLICK, pitch));
+    }
+
+    private void togglePicker(ColorSetting cs) {
+        if (!pickers.remove(cs)) {
+            pickers.add(cs);
+            int c = cs.get();
+            hsbs.put(cs, Color.RGBtoHSB((c >> 16) & 255, (c >> 8) & 255, c & 255, null));
+        }
+        click(1.1f);
+    }
+
+    /** Saturation/brightness square, hue bar and a rainbow switch. Returns its height. */
+    private int drawPicker(DrawContext ctx, ColorSetting cs, int x, int y0, int mx, int my, boolean lClick, boolean active) {
+        float a = open;
+        int accent = NexusClient.GUI_CFG.accent();
+        float[] hsb = hsbs.computeIfAbsent(cs, k -> {
+            int c = k.get();
+            return Color.RGBtoHSB((c >> 16) & 255, (c >> 8) & 255, c & 255, null);
+        });
+        int px = x + PAD, pw = RW - 2 * PAD;
+        int sbY = y0 + 2, sbH = 36;
+        int hueY = sbY + sbH + 4, hueH = 8;
+        int rbY = hueY + hueH + 4;
+
+        for (int cx = 0; cx < pw; cx += 2) {
+            float sat = cx / (float) pw;
+            int top = 0xFF000000 | (Color.HSBtoRGB(hsb[0], sat, 1f) & 0xFFFFFF);
+            int bot = 0xFF000000 | (Color.HSBtoRGB(hsb[0], sat, 0f) & 0xFFFFFF);
+            ctx.fillGradient(px + cx, sbY, Math.min(px + cx + 2, px + pw), sbY + sbH,
+                    RenderUtil.alpha(top, a), RenderUtil.alpha(bot, a));
+        }
+        for (int cx = 0; cx < pw; cx += 2) {
+            int hc = 0xFF000000 | (Color.HSBtoRGB(cx / (float) pw, 1f, 1f) & 0xFFFFFF);
+            ctx.fill(px + cx, hueY, Math.min(px + cx + 2, px + pw), hueY + hueH, RenderUtil.alpha(hc, a));
+        }
+
+        int cx = px + (int) (hsb[1] * pw), cy = sbY + (int) ((1f - hsb[2]) * sbH);
+        ctx.fill(cx - 2, cy - 2, cx + 3, cy + 3, RenderUtil.alpha(0xFFFFFFFF, a));
+        ctx.fill(cx - 1, cy - 1, cx + 2, cy + 2, RenderUtil.alpha(0xFF000000 | (Color.HSBtoRGB(hsb[0], hsb[1], hsb[2]) & 0xFFFFFF), a));
+        int hx = px + (int) (hsb[0] * pw);
+        ctx.fill(hx - 1, hueY - 1, hx + 1, hueY + hueH + 1, RenderUtil.alpha(0xFFFFFFFF, a));
+
+        boolean overRb = active && mx >= x + 2 && mx < x + RW - 2 && my >= rbY && my < rbY + 14;
+        if (overRb) ctx.fill(x + 2, rbY, x + RW - 2, rbY + 14, RenderUtil.alpha(0x22FFFFFF, a));
+        RenderUtil.text(ctx, "Rainbow", px, rbY + 3, RenderUtil.alpha(TEXT, a));
+        float t = anim(enAnim, cs, cs.isRainbow(), 14f);
+        int tx = x + RW - PAD - 20, ty = rbY + 2;
+        RenderUtil.roundRect(ctx, tx, ty, tx + 20, ty + 10, 5, RenderUtil.alpha(RenderUtil.lerp(BOX, accent, t), a));
+        int kx = tx + 1 + Math.round(t * 10f);
+        RenderUtil.roundRect(ctx, kx, ty + 1, kx + 8, ty + 9, 4, RenderUtil.alpha(0xFFFFFFFF, a));
+
+        if (active && lClick) {
+            if (mx >= px && mx < px + pw && my >= sbY && my < sbY + sbH) {
+                pickDrag = 1; pickSetting = cs; pickX = px; pickY = sbY; pickW = pw; pickH = sbH;
+            } else if (mx >= px && mx < px + pw && my >= hueY && my < hueY + hueH) {
+                pickDrag = 2; pickSetting = cs; pickX = px; pickY = hueY; pickW = pw; pickH = hueH;
+            } else if (overRb) {
+                cs.setRainbow(!cs.isRainbow());
+                click(cs.isRainbow() ? 1.25f : 0.85f);
+            }
+        }
+        if (pickSetting == cs && pickDrag != 0) {
+            float fx = Math.max(0f, Math.min(0.999f, (mx - pickX) / (float) pickW));
+            float fy = Math.max(0f, Math.min(1f, (my - pickY) / (float) pickH));
+            if (pickDrag == 1) { hsb[1] = fx; hsb[2] = 1f - fy; } else { hsb[0] = fx; }
+            cs.set(0xFF000000 | (Color.HSBtoRGB(hsb[0], hsb[1], hsb[2]) & 0xFFFFFF));
+            cs.setRainbow(false);
+        }
+        return PICK_H;
     }
 
     private void handleKeys() {
