@@ -52,6 +52,7 @@ public final class NexusClient implements ClientModInitializer {
         MODULES.register(new WTapModule());
         MODULES.register(new CombatBotModule());
         MODULES.register(new SprintModule());
+        MODULES.register(new GodModeModule());
         MODULES.register(new AimAssistModule());
         MODULES.register(new AutoPotModule());
         MODULES.register(new AutoGappleModule());
